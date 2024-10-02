@@ -96,6 +96,7 @@ func main() {
 	go chooseSell(pairr, &mx)
 
 	select {}
+
 	// var mutexbinance sync.Mutex
 	// var mutexpayeer sync.Mutex
 	//	typee := "market"
@@ -183,21 +184,29 @@ func chooseSell(pairr pairs, mx *sync.Mutex) {
 	for {
 
 		mx.Lock()
-		// SS = 0
+		SS = 0
 		for _, Asks := range ords.Pairs[pairr].Asks {
 
-			p, _ := strconv.ParseFloat(Asks.Price, 64)
-			b, _ := strconv.ParseFloat(binask, 64)
-			c, _ := strconv.ParseFloat(Asks.Amount, 64)
-			fmt.Println(p, b, c)
-			//	if p/b < 1.3 { //										вернуть 0.99
-			//		SS += c
-			//	} else {
-			//		break
-			//	}
-
+			p, err := strconv.ParseFloat(Asks.Price, 64)
+			if err != nil {
+				fmt.Println("p error -> ", err)
+			}
+			b, err := strconv.ParseFloat(binask, 64)
+			if err != nil {
+				fmt.Println("b error -> ", err)
+			}
+			c, err := strconv.ParseFloat(Asks.Amount, 64)
+			if err != nil {
+				fmt.Println("c error -> ", err)
+			}
+			//fmt.Println(p, b, c)
+			if p/b < 1.1 { //										вернуть 0.99
+				SS += c
+			} else {
+				break
+			}
 		}
-		//fmt.Println("SS -> ", SS)
+		fmt.Println("SS -> ", SS)
 
 		mx.Unlock()
 
@@ -227,56 +236,53 @@ func chooseSell(pairr pairs, mx *sync.Mutex) {
 //}
 
 func BalanceRequest() {
-
+	var resp *http.Response
 	baseURL := "https://payeer.com/api/trade/"
 	endpoint := "account"
-
 	req := request{
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	rBody := bytes.NewBuffer(nil)      //создает буфер бади
-	json.NewEncoder(rBody).Encode(req) // энкодит реквест и записывает в бади
-	//	fmt.Println(rBody)
-	r, _ := http.NewRequest(http.MethodPost, (baseURL + endpoint), rBody)
+	rBody, err := json.Marshal(req)
+	if err != nil {
+		fmt.Println("rBody Marshal error #1 -> ", err)
+	}
+
+	r, err := http.NewRequest(http.MethodPost, (baseURL + endpoint), bytes.NewBuffer(rBody))
+	if err != nil {
+		fmt.Println("http.NewRequest error #1 -> ", err)
+	}
 
 	client := http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: 10 * time.Hour,
 	}
 
 	secret := "plIzgsI8akwDumrU"
-	data := endpoint + rBody.String()
+	data := endpoint + string(rBody)
+	fmt.Println("string(rBody) -> ", string(rBody))
 
-	// Create a new HMAC by defining the hash type and the key (as byte array)
-	h := hmac.New(sha256.New, []byte(secret))
-	// Write Data to it
-	h.Write([]byte(data))
-
-	// Get result and encode as hexadecimal string
-	sha := hex.EncodeToString(h.Sum(nil))
+	h := hmac.New(sha256.New, []byte(secret)) // Create a new HMAC by defining the hash type and the key (as byte array)
+	h.Write([]byte(data))                     // Write Data to it
+	sha := hex.EncodeToString(h.Sum(nil))     // Get result and encode as hexadecimal string
 
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("API-ID", "3dc19f11-b03f-4d38-be50-c33a2585e12d")
 	r.Header.Set("API-SIGN", sha)
 
-	resp, err := client.Do(r)
-	if err != nil {
-		fmt.Printf("failed to create request %v", err)
+	for {
+		resp, err = client.Do(r)
+		if err == nil {
+			break
+		}
+		fmt.Println("failed to create request #1 -> ", err)
 	}
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println("failed to read resp.Body #1 -> ", err)
 	}
 
-	//	fmt.Println("response body->", string(bodyBytes))
-
 	json.Unmarshal(bodyBytes, &Balas)
-
-	//	fmt.Printf("%+v", Balas)
-
-	//	fmt.Println(Balas.Balance[USD])
-
 }
 
 func PostOrder(pair string, typee string, action string, amount string) {
