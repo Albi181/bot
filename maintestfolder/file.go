@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"sync"
@@ -17,7 +16,6 @@ import (
 )
 
 var SS float64
-var Chipi float64 = 1.005
 
 type pairs string
 
@@ -87,50 +85,22 @@ var ords OrdersReque
 func main() {
 
 	var mx sync.Mutex
-
+	typee := "market"
+	action := "sell"
 	pair := "BTC_USD"
 	var pairr pairs = "BTC_USD"
 
 	go Bintic2()
 	go OrdersRequest(pair, &mx)
-	go chooseSell(pairr, &mx)
+	go chooseSell(pairr, &mx, pair, typee, action)
 
 	select {}
-
-	// var mutexbinance sync.Mutex
-	// var mutexpayeer sync.Mutex
-	//	typee := "market"
-	//	action := "sell"
-	//	amount := "0.00000001"
-	//PostOrder(pair, typee, action, amount)
-	//var price []float64 = ords.Pairs[BTC_USD].Asks[].Price
-	//for index, value := range ords.Pairs[BTC_USD].Asks[].Price {
-	//	fmt.Println(index, value)
-	//}
-	//	ords.Pairs[BTC_USD].Asks[3].Price, 64)
 }
 
-/*
-	func checkOrds(mx *sync.Mutex) {
-		var b string
-		for {
-			mx.Lock()
-			if ords.Pairs[BTC_USD].Ask != "5" {
-				b = ords.Pairs[BTC_USD].Ask
-				fmt.Println(b)
-			}
-			mx.Unlock()
-		}
-	}
-*/
 func Bintic2() {
-
 	Orders2 := binance.NewClient().SubscribeTicker(binance.SYMBOL_BTCUSDT, time.Millisecond*100)
-
 	for Order2 := range Orders2 {
-
 		binask = Order2.AskPrice
-		//fmt.Println(binask)
 	}
 	fmt.Println("There were no reasons to be here =( ... ", binask)
 }
@@ -146,7 +116,7 @@ func OrdersRequest(pair string, mx *sync.Mutex) {
 
 	rBody, err := json.Marshal(req)
 	if err != nil {
-		fmt.Println("rBody Marshal error -> ", err)
+		fmt.Println("rBody Marshal error #2 -> ", err)
 	}
 
 	for {
@@ -155,34 +125,31 @@ func OrdersRequest(pair string, mx *sync.Mutex) {
 			if err == nil {
 				break
 			}
-			fmt.Println("request error -> ", err)
+			fmt.Println("request error #2 -> ", err)
 		}
 
 		bodyBytes, err := io.ReadAll(r.Body)
 		if err != nil {
-			fmt.Println("responce error -> ", err)
+			fmt.Println("responce error #2 -> ", err)
 		}
-		//fmt.Println("response body->", string(bodyBytes))
 
 		mx.Lock()
 		json.Unmarshal(bodyBytes, &ords)
 		mx.Unlock()
-		//fmt.Println(ords.Pairs[BTC_USD].Asks[1].Price)
 
 		time.Sleep(1 * time.Second)
 	}
 }
 
-func chooseSell(pairr pairs, mx *sync.Mutex) {
-	//var amountToSell float64
-	// var payeerOrdersResponce OrdersReque
+func chooseSell(pairr pairs, mx *sync.Mutex, pair string, typee string, action string) {
+	var amountToSell float64
 
 	BalanceRequest()
 	fmt.Println(Balas.Balance["BTC"].Available)
 	time.Sleep(5 * time.Second)
 
 	for {
-
+		time.Sleep(5 * time.Millisecond)
 		mx.Lock()
 		SS = 0
 		for _, Asks := range ords.Pairs[pairr].Asks {
@@ -199,41 +166,27 @@ func chooseSell(pairr pairs, mx *sync.Mutex) {
 			if err != nil {
 				fmt.Println("c error -> ", err)
 			}
-			//fmt.Println(p, b, c)
-			if p/b < 1.1 { //										вернуть 0.99
+
+			if p/b < 1.1 { //																вернуть 0.99
 				SS += c
 			} else {
 				break
 			}
 		}
 		fmt.Println("SS -> ", SS)
-
 		mx.Unlock()
 
-		//amountToSell = min(Balas.Balance["BTC"].Available, SS)
-		//	fmt.Println("amount avaliable for sell ", amountToSell)
+		amountToSell = min(Balas.Balance["BTC"].Available, SS)
+		fmt.Println("amount avaliable for sell ", amountToSell)
 
-		//	if amountToSell >= 0.00001 {
+		if amountToSell >= 0.00001 { // 													задать минимальный эмаунт для пары
 
-		//  	PostOrder(pair string, typee string, action string, amount string)
-		//		time.Sleep(500 * time.Millisecond)
-		//		BalanceRequest()
-		//	}
+			//			PostOrder(pair, typee, action, strconv.FormatFloat(amountToSell, 'f', 8, 32))
+			time.Sleep(500 * time.Millisecond)
+			BalanceRequest()
+		}
 	}
 }
-
-//func mincopy() {
-//	var amount float64
-//
-//	BalanceRequest()
-//
-//	amount = min(Balas.Balance[USD].Total, 0.01) // вместо 0.01 будет полученный эмаунт для выбора
-//	if amount >= 0.0001 {                        // минимальное значение для заявки
-//		//Post order(amount)
-//	}
-//	time.Sleep(1 * time.Second)
-
-//}
 
 func BalanceRequest() {
 	var resp *http.Response
@@ -259,7 +212,6 @@ func BalanceRequest() {
 
 	secret := "plIzgsI8akwDumrU"
 	data := endpoint + string(rBody)
-	fmt.Println("string(rBody) -> ", string(rBody))
 
 	h := hmac.New(sha256.New, []byte(secret)) // Create a new HMAC by defining the hash type and the key (as byte array)
 	h.Write([]byte(data))                     // Write Data to it
@@ -286,10 +238,8 @@ func BalanceRequest() {
 }
 
 func PostOrder(pair string, typee string, action string, amount string) {
-
 	baseURL := "https://payeer.com/api/trade/"
 	endpoint := "order_create"
-
 	req := postorderreq{
 		Pair:      pair,
 		Type:      typee,
@@ -298,46 +248,33 @@ func PostOrder(pair string, typee string, action string, amount string) {
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	rBody := bytes.NewBuffer(nil)      //создает буфер бади
-	json.NewEncoder(rBody).Encode(req) // энкодит реквест и записывает в бади
-	//	fmt.Println(rBody)
-	r, _ := http.NewRequest(http.MethodPost, (baseURL + endpoint), rBody)
+	rBody, err := json.Marshal(req)
+	if err != nil {
+		fmt.Println("rBody Marshal error #3 -> ", err)
+	}
+
+	r, err := http.NewRequest(http.MethodPost, (baseURL + endpoint), bytes.NewBuffer(rBody))
+	if err != nil {
+		fmt.Println("http.NewRequest error #3 -> ", err)
+	}
 
 	client := http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: 10 * time.Hour,
 	}
 
 	secret := "plIzgsI8akwDumrU"
-	data := endpoint + rBody.String()
+	data := endpoint + string(rBody)
 
-	// Create a new HMAC by defining the hash type and the key (as byte array)
-	h := hmac.New(sha256.New, []byte(secret))
-	// Write Data to it
-	h.Write([]byte(data))
-
-	// Get result and encode as hexadecimal string
-	sha := hex.EncodeToString(h.Sum(nil))
+	h := hmac.New(sha256.New, []byte(secret)) // Create a new HMAC by defining the hash type and the key (as byte array)
+	h.Write([]byte(data))                     // Write Data to it
+	sha := hex.EncodeToString(h.Sum(nil))     // Get result and encode as hexadecimal string
 
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("API-ID", "3dc19f11-b03f-4d38-be50-c33a2585e12d")
 	r.Header.Set("API-SIGN", sha)
 
-	resp, err := client.Do(r)
+	_, err = client.Do(r)
 	if err != nil {
-		fmt.Printf("failed to create request %v", err)
+		fmt.Println("failed to create request #3 -> ", err)
 	}
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println("response body-1>", string(bodyBytes))
-
-	//	json.Unmarshal(bodyBytes, &Balas)
-
-	//	fmt.Printf("%+v", Balas)
-
-	//	fmt.Println(Balas.Balance[USD])
-
 }
