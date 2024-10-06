@@ -15,13 +15,14 @@ import (
 	"time"
 )
 
-var SS float64
+var ss float64
 
 type pairs string
 
 const (
-	BTC_USD pairs = "BTC_USD"
-	BTC_RUB pairs = "BTC_RUB"
+	BTC_USD  pairs = "BTC_USD"
+	BTC_RUB  pairs = "BTC_RUB"
+	ETH_USDT pairs = "ETH_USDT"
 )
 
 type OrdersReque struct {
@@ -57,6 +58,7 @@ type postorderreq struct {
 	Type      string `json:"type"`
 	Action    string `json:"action"`
 	Amount    string `json:"amount"`
+	Value     string `json:"value"`
 	Timestamp int64  `json:"ts"`
 }
 
@@ -71,6 +73,7 @@ const (
 	RUB  currency = "RUB"
 	EUR  currency = "EUR"
 	USDT currency = "USDT"
+	ETH  currency = "ETH"
 )
 
 type balances struct {
@@ -80,29 +83,41 @@ type balances struct {
 }
 
 var binask string // цена бинанс аск (стримится функцией Bintic2)
+var binbid string
 var ords OrdersReque
 
 func main() {
-
+	var buy, sell bool
 	var mx sync.Mutex
 	typee := "market"
-	action := "sell"
-	pair := "BTC_USD"
-	var pairr pairs = "BTC_USD"
+	const binpair binance.Symbol = "ETHUSDT"
+	pair := "ETH_USDT"
+	const pairr pairs = "ETH_USDT"
+	const base currency = "ETH"
+	const nonbase currency = "USDT"
+	buy = true
+	sell = true
 
-	go Bintic2()
+	BalanceRequest()
+	fmt.Println(Balas.Balance["BTC"].Available)
+	go Bintic2(binpair)
 	go OrdersRequest(pair, &mx)
-	go chooseSell(pairr, &mx, pair, typee, action)
+
+	time.Sleep(5 * time.Second)
+
+	go chooseSell(pairr, &mx, pair, typee, sell, base)
+	go chooseBuy(pairr, &mx, pair, typee, buy, nonbase)
 
 	select {}
 }
 
-func Bintic2() {
-	Orders2 := binance.NewClient().SubscribeTicker(binance.SYMBOL_BTCUSDT, time.Millisecond*100)
+func Bintic2(binpair binance.Symbol) {
+	Orders2 := binance.NewClient().SubscribeTicker(binpair, time.Millisecond*100)
 	for Order2 := range Orders2 {
 		binask = Order2.AskPrice
+		binbid = Order2.BidPrice
 	}
-	fmt.Println("There were no reasons to be here =( ... ", binask)
+	fmt.Println("There were no reasons to be here =( ... ", binask, binbid)
 }
 
 func OrdersRequest(pair string, mx *sync.Mutex) {
@@ -137,53 +152,92 @@ func OrdersRequest(pair string, mx *sync.Mutex) {
 		json.Unmarshal(bodyBytes, &ords)
 		mx.Unlock()
 
-		time.Sleep(1 * time.Second)
+		time.Sleep(250 * time.Millisecond)
 	}
 }
 
-func chooseSell(pairr pairs, mx *sync.Mutex, pair string, typee string, action string) {
+func chooseSell(pairr pairs, mx *sync.Mutex, pair string, typee string, sell bool, base currency) {
 	var amountToSell float64
+	if sell {
+		for {
+			time.Sleep(5 * time.Millisecond)
+			mx.Lock()
+			ss = 0
+			for _, Bids := range ords.Pairs[pairr].Bids {
 
-	BalanceRequest()
-	fmt.Println(Balas.Balance["BTC"].Available)
-	time.Sleep(5 * time.Second)
+				p, err := strconv.ParseFloat(Bids.Price, 64)
+				if err != nil {
+					fmt.Println("p error -> ", err)
+				}
+				b, err := strconv.ParseFloat(binask, 64)
+				if err != nil {
+					fmt.Println("b error -> ", err)
+				}
+				c, err := strconv.ParseFloat(Bids.Amount, 64)
+				if err != nil {
+					fmt.Println("c error -> ", err)
+				}
 
-	for {
-		time.Sleep(5 * time.Millisecond)
-		mx.Lock()
-		SS = 0
-		for _, Asks := range ords.Pairs[pairr].Asks {
-
-			p, err := strconv.ParseFloat(Asks.Price, 64)
-			if err != nil {
-				fmt.Println("p error -> ", err)
+				if p/b > 1.01 {
+					ss += c
+				} else {
+					break
+				}
 			}
-			b, err := strconv.ParseFloat(binask, 64)
-			if err != nil {
-				fmt.Println("b error -> ", err)
-			}
-			c, err := strconv.ParseFloat(Asks.Amount, 64)
-			if err != nil {
-				fmt.Println("c error -> ", err)
-			}
+			//fmt.Println("ss -> ", ss)
+			mx.Unlock()
 
-			if p/b < 1.1 { //																вернуть 0.99
-				SS += c
-			} else {
-				break
+			amountToSell = min(Balas.Balance[base].Available, ss)
+			//fmt.Println("amount avaliable for sell ", amountToSell)
+
+			if amountToSell >= 0.0001 { // 													задать минимальный эмаунт для пары
+
+				PostOrder(pair, typee, "sell", strconv.FormatFloat(amountToSell, 'f', 8, 32), "")
+				time.Sleep(500 * time.Millisecond)
+				BalanceRequest()
 			}
 		}
-		fmt.Println("SS -> ", SS)
-		mx.Unlock()
+	}
+}
+func chooseBuy(pairr pairs, mx *sync.Mutex, pair string, typee string, buy bool, nonbase currency) {
+	var valueToBuy float64
+	if buy {
+		for {
+			time.Sleep(5 * time.Millisecond)
+			mx.Lock()
+			ss = 0
+			for _, Asks := range ords.Pairs[pairr].Asks {
 
-		amountToSell = min(Balas.Balance["BTC"].Available, SS)
-		fmt.Println("amount avaliable for sell ", amountToSell)
+				p, err := strconv.ParseFloat(Asks.Price, 64)
+				if err != nil {
+					fmt.Println("p error -> ", err)
+				}
+				b, err := strconv.ParseFloat(binbid, 64)
+				if err != nil {
+					fmt.Println("b error -> ", err)
+				}
+				c, err := strconv.ParseFloat(Asks.Value, 64)
+				if err != nil {
+					fmt.Println("c error -> ", err)
+				}
 
-		if amountToSell >= 0.00001 { // 													задать минимальный эмаунт для пары
+				if p/b < 0.99 {
+					ss += c
+				} else {
+					break
+				}
+			}
+			//fmt.Println("ss -> ", ss)
+			mx.Unlock()
 
-			//			PostOrder(pair, typee, action, strconv.FormatFloat(amountToSell, 'f', 8, 32))
-			time.Sleep(500 * time.Millisecond)
-			BalanceRequest()
+			valueToBuy = min(Balas.Balance[nonbase].Available, ss)
+			//fmt.Println("value avaliable for buy ", valueToBuy)
+
+			if valueToBuy >= 5 { // 															задать минимальный эмаунт для пары
+				PostOrder(pair, typee, "buy", "", strconv.FormatFloat(valueToBuy, 'f', 8, 32))
+				time.Sleep(500 * time.Millisecond)
+				BalanceRequest()
+			}
 		}
 	}
 }
@@ -227,6 +281,7 @@ func BalanceRequest() {
 			break
 		}
 		fmt.Println("failed to create request #1 -> ", err)
+		time.Sleep(250 * time.Millisecond)
 	}
 
 	bodyBytes, err := io.ReadAll(resp.Body)
@@ -237,7 +292,7 @@ func BalanceRequest() {
 	json.Unmarshal(bodyBytes, &Balas)
 }
 
-func PostOrder(pair string, typee string, action string, amount string) {
+func PostOrder(pair string, typee string, action string, amount string, value string) {
 	baseURL := "https://payeer.com/api/trade/"
 	endpoint := "order_create"
 	req := postorderreq{
@@ -245,6 +300,7 @@ func PostOrder(pair string, typee string, action string, amount string) {
 		Type:      typee,
 		Action:    action,
 		Amount:    amount,
+		Value:     value,
 		Timestamp: time.Now().UnixMilli(),
 	}
 
