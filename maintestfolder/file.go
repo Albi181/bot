@@ -37,6 +37,13 @@ type AsksBids struct {
 	Bids []AsksBisdInfo `json:"bids"`
 }
 
+type LimitOrderResponce struct {
+	Success  bool `json:"success"`
+	Order_id int  `json:"order_id"`
+}
+
+var LimitOrdId LimitOrderResponce
+
 type AsksBisdInfo struct {
 	Price  string `json:"price"`
 	Amount string `json:"amount"`
@@ -59,7 +66,13 @@ type postorderreq struct {
 	Action    string `json:"action"`
 	Amount    string `json:"amount"`
 	Value     string `json:"value"`
+	Price     string `json:"price"`
 	Timestamp int64  `json:"ts"`
+}
+
+type cancelorder struct {
+	Order_id  int   `json:"order_id"`
+	Timestamp int64 `json:"ts"`
 }
 
 type Balancejson struct {
@@ -86,7 +99,10 @@ var binask string // цена бинанс аск (стримится функц
 var binbid string
 var ords OrdersReque
 
+var buyorders int64
+
 func main() {
+
 	var buy, sell bool
 	var mx sync.Mutex
 	typee := "market"
@@ -99,16 +115,18 @@ func main() {
 	sell = true
 
 	BalanceRequest()
-	fmt.Println(Balas.Balance["BTC"].Available)
+
 	go Bintic2(binpair)
 	go OrdersRequest(pair, &mx)
 
 	time.Sleep(5 * time.Second)
 
+	go LimitBuy(pairr, &mx)
 	go chooseSell(pairr, &mx, pair, typee, sell, base)
 	go chooseBuy(pairr, &mx, pair, typee, buy, nonbase)
 
 	select {}
+
 }
 
 func Bintic2(binpair binance.Symbol) {
@@ -117,7 +135,6 @@ func Bintic2(binpair binance.Symbol) {
 		binask = Order2.AskPrice
 		binbid = Order2.BidPrice
 	}
-	fmt.Println("There were no reasons to be here =( ... ", binask, binbid)
 }
 
 func OrdersRequest(pair string, mx *sync.Mutex) {
@@ -281,7 +298,7 @@ func BalanceRequest() {
 			break
 		}
 		fmt.Println("failed to create request #1 -> ", err)
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 	}
 
 	bodyBytes, err := io.ReadAll(resp.Body)
@@ -332,5 +349,156 @@ func PostOrder(pair string, typee string, action string, amount string, value st
 	_, err = client.Do(r)
 	if err != nil {
 		fmt.Println("failed to create request #3 -> ", err)
+	}
+}
+
+func PostLimitOrder(pair string, action string, amount string, price string) {
+	baseURL := "https://payeer.com/api/trade/"
+	endpoint := "order_create"
+	req := postorderreq{
+		Pair:      pair,
+		Type:      "limit",
+		Action:    action,
+		Amount:    amount,
+		Price:     price,
+		Timestamp: time.Now().UnixMilli(),
+	}
+
+	rBody, err := json.Marshal(req)
+	if err != nil {
+		fmt.Println("rBody Marshal error #4 -> ", err)
+	}
+
+	r, err := http.NewRequest(http.MethodPost, (baseURL + endpoint), bytes.NewBuffer(rBody))
+	if err != nil {
+		fmt.Println("http.NewRequest error #4 -> ", err)
+	}
+
+	client := http.Client{
+		Timeout: 10 * time.Hour,
+	}
+
+	secret := "plIzgsI8akwDumrU"
+	data := endpoint + string(rBody)
+
+	h := hmac.New(sha256.New, []byte(secret)) // Create a new HMAC by defining the hash type and the key (as byte array)
+	h.Write([]byte(data))                     // Write Data to it
+	sha := hex.EncodeToString(h.Sum(nil))     // Get result and encode as hexadecimal string
+
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("API-ID", "3dc19f11-b03f-4d38-be50-c33a2585e12d")
+	r.Header.Set("API-SIGN", sha)
+
+	resp, err := client.Do(r)
+	if err != nil {
+		fmt.Println("failed to create request #4 -> ", err)
+	}
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println("failed to read resp.Body #1 -> ", err)
+	}
+
+	json.Unmarshal(bodyBytes, &LimitOrdId)
+
+}
+
+func CancelLimitOrder(order_id int) {
+	baseURL := "https://payeer.com/api/trade/"
+	endpoint := "order_cancel"
+	req := cancelorder{
+		Order_id:  order_id,
+		Timestamp: time.Now().UnixMilli(),
+	}
+
+	rBody, err := json.Marshal(req)
+	if err != nil {
+		fmt.Println("rBody Marshal error #5 -> ", err)
+	}
+
+	r, err := http.NewRequest(http.MethodPost, (baseURL + endpoint), bytes.NewBuffer(rBody))
+	if err != nil {
+		fmt.Println("http.NewRequest error #5 -> ", err)
+	}
+
+	client := http.Client{
+		Timeout: 10 * time.Hour,
+	}
+
+	secret := "plIzgsI8akwDumrU"
+	data := endpoint + string(rBody)
+
+	h := hmac.New(sha256.New, []byte(secret)) // Create a new HMAC by defining the hash type and the key (as byte array)
+	h.Write([]byte(data))                     // Write Data to it
+	sha := hex.EncodeToString(h.Sum(nil))     // Get result and encode as hexadecimal string
+
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("API-ID", "3dc19f11-b03f-4d38-be50-c33a2585e12d")
+	r.Header.Set("API-SIGN", sha)
+
+	_, err = client.Do(r)
+	if err != nil {
+		fmt.Println("failed to create request #5 -> ", err)
+	}
+}
+
+func LimitBuy(pairr pairs, mx *sync.Mutex) {
+	buyorders = 0
+	var pricebuy float64
+	var pricecansel float64
+	for {
+		if buyorders == 0 {
+			time.Sleep(5 * time.Millisecond)
+
+			pricebuy, _ = strconv.ParseFloat(binbid, 64)
+
+			pricebuy *= 0.98
+			mx.Lock()
+			for _, Bids := range ords.Pairs[pairr].Bids {
+
+				p, err := strconv.ParseFloat(Bids.Price, 64)
+				if err != nil {
+					fmt.Println("p error -> ", err)
+				}
+				if p <= pricebuy {
+					pricebuy = p + 0.01
+					break
+				}
+			}
+			mx.Unlock()
+
+			PostLimitOrder("ETH_USDT", "buy", "0.001", strconv.FormatFloat(pricebuy, 'f', 2, 32))
+			buyorders = 1
+			time.Sleep(500 * time.Millisecond)
+			BalanceRequest()
+
+		}
+		time.Sleep(1 * time.Minute)
+		if buyorders == 1 {
+			time.Sleep(5 * time.Millisecond)
+
+			pricecansel, _ = strconv.ParseFloat(binbid, 64)
+
+			pricecansel *= 0.98
+			mx.Lock()
+			for _, Bids := range ords.Pairs[pairr].Bids {
+
+				p, err := strconv.ParseFloat(Bids.Price, 64)
+				if err != nil {
+					fmt.Println("p error -> ", err)
+				}
+				if p <= pricecansel {
+					pricecansel = p + 0.01
+					break
+				}
+			}
+			mx.Unlock()
+
+			if pricecansel != pricebuy {
+				CancelLimitOrder(LimitOrdId.Order_id)
+			}
+			time.Sleep(250 * time.Millisecond)
+			buyorders = 0
+		}
 	}
 }
