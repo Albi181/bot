@@ -104,28 +104,28 @@ var sellorders int64
 
 func main() {
 
-	var buy, sell bool
+	//var buy, sell bool
 	var mx sync.Mutex
-	typee := "market"
+	//typee := "market"
 	const binpair binance.Symbol = "ETHUSDT"
 	pair := "ETH_USDT"
 	const pairr pairs = "ETH_USDT"
 	const base currency = "ETH"
 	const nonbase currency = "USDT"
-	buy = true
-	sell = true
+	//buy = true
+	//sell = true
 
-	BalanceRequest()
+	//BalanceRequest()
 
-	go Bintic2(binpair)
-	go OrdersRequest(pair, &mx)
+	//go Bintic2(binpair)
+	go OrdersRequest(pair, &mx) // ords.Status true
 
-	time.Sleep(5 * time.Second)
+	//time.Sleep(10 * time.Second)
 
-	go LimitSell(pairr, &mx)
+	//go LimitSell(pairr, &mx)
 	//	go LimitBuy(pairr, &mx)
-	go chooseSell(pairr, &mx, pair, typee, sell, base)
-	go chooseBuy(pairr, &mx, pair, typee, buy, nonbase)
+	//go chooseSell(pairr, &mx, pair, typee, sell, base)
+	//go chooseBuy(pairr, &mx, pair, typee, buy, nonbase)
 
 	select {}
 
@@ -170,7 +170,7 @@ func OrdersRequest(pair string, mx *sync.Mutex) {
 		mx.Lock()
 		json.Unmarshal(bodyBytes, &ords)
 		mx.Unlock()
-
+		fmt.Println(ords.Status)
 		time.Sleep(250 * time.Millisecond)
 	}
 }
@@ -456,7 +456,7 @@ func LimitBuy(pairr pairs, mx *sync.Mutex) {
 
 			pricebuy, _ = strconv.ParseFloat(binbid, 64)
 
-			pricebuy *= 0.98
+			pricebuy *= 0.98 // 												% для лимитки
 			mx.Lock()
 			for _, Bids := range ords.Pairs[pairr].Bids {
 
@@ -470,7 +470,7 @@ func LimitBuy(pairr pairs, mx *sync.Mutex) {
 				}
 			}
 
-			PostLimitOrder("ETH_USDT", "buy", "0.001", strconv.FormatFloat(pricebuy, 'f', 2, 32))
+			PostLimitOrder("ETH_USDT", "buy", "0.001", strconv.FormatFloat(pricebuy, 'f', 2, 32)) // пост ордер в лимитке
 			id = LimitOrdId.Order_id
 			mx.Unlock()
 
@@ -485,7 +485,7 @@ func LimitBuy(pairr pairs, mx *sync.Mutex) {
 
 			pricecansel, _ = strconv.ParseFloat(binbid, 64)
 
-			pricecansel *= 0.98
+			pricecansel *= 0.98 // 												% для лимитки
 			mx.Lock()
 			for _, Bids := range ords.Pairs[pairr].Bids {
 
@@ -520,7 +520,7 @@ func LimitSell(pairr pairs, mx *sync.Mutex) {
 
 			pricesell, _ = strconv.ParseFloat(binbid, 64)
 
-			pricesell *= 1.003
+			pricesell *= 1.002 // 												% для лимитки
 			mx.Lock()
 			for _, Bids := range ords.Pairs[pairr].Bids {
 
@@ -534,7 +534,7 @@ func LimitSell(pairr pairs, mx *sync.Mutex) {
 				}
 			}
 
-			PostLimitOrder("ETH_USDT", "sell", "0.04", strconv.FormatFloat(pricesell, 'f', 2, 32))
+			PostLimitOrder("ETH_USDT", "sell", "0.01435187", strconv.FormatFloat(pricesell, 'f', 2, 32)) // пост ордер в лимитке
 			id = LimitOrdId.Order_id
 			mx.Unlock()
 
@@ -549,7 +549,7 @@ func LimitSell(pairr pairs, mx *sync.Mutex) {
 
 			pricecansel, _ = strconv.ParseFloat(binbid, 64)
 
-			pricecansel *= 1.003
+			pricecansel *= 1.002 // 												% для лимитки
 			mx.Lock()
 			for _, Bids := range ords.Pairs[pairr].Bids {
 
