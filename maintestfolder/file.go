@@ -100,6 +100,7 @@ var binbid string
 var ords OrdersReque
 
 var buyorders int64
+var sellorders int64
 
 func main() {
 
@@ -121,7 +122,8 @@ func main() {
 
 	time.Sleep(5 * time.Second)
 
-	go LimitBuy(pairr, &mx)
+	go LimitSell(pairr, &mx)
+	//	go LimitBuy(pairr, &mx)
 	go chooseSell(pairr, &mx, pair, typee, sell, base)
 	go chooseBuy(pairr, &mx, pair, typee, buy, nonbase)
 
@@ -440,12 +442,14 @@ func CancelLimitOrder(order_id int) {
 	if err != nil {
 		fmt.Println("failed to create request #5 -> ", err)
 	}
+
 }
 
 func LimitBuy(pairr pairs, mx *sync.Mutex) {
 	buyorders = 0
 	var pricebuy float64
 	var pricecansel float64
+	var id int
 	for {
 		if buyorders == 0 {
 			time.Sleep(5 * time.Millisecond)
@@ -465,11 +469,13 @@ func LimitBuy(pairr pairs, mx *sync.Mutex) {
 					break
 				}
 			}
-			mx.Unlock()
 
 			PostLimitOrder("ETH_USDT", "buy", "0.001", strconv.FormatFloat(pricebuy, 'f', 2, 32))
+			id = LimitOrdId.Order_id
+			mx.Unlock()
+
 			buyorders = 1
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(1000 * time.Millisecond)
 			BalanceRequest()
 
 		}
@@ -495,10 +501,74 @@ func LimitBuy(pairr pairs, mx *sync.Mutex) {
 			mx.Unlock()
 
 			if pricecansel != pricebuy {
-				CancelLimitOrder(LimitOrdId.Order_id)
+				CancelLimitOrder(id)
 			}
 			time.Sleep(250 * time.Millisecond)
 			buyorders = 0
+		}
+	}
+}
+
+func LimitSell(pairr pairs, mx *sync.Mutex) {
+	sellorders = 0
+	var pricesell float64
+	var pricecansel float64
+	var id int
+	for {
+		if sellorders == 0 {
+			time.Sleep(5 * time.Millisecond)
+
+			pricesell, _ = strconv.ParseFloat(binbid, 64)
+
+			pricesell *= 1.003
+			mx.Lock()
+			for _, Bids := range ords.Pairs[pairr].Bids {
+
+				p, err := strconv.ParseFloat(Bids.Price, 64)
+				if err != nil {
+					fmt.Println("p error -> ", err)
+				}
+				if p >= pricesell {
+					pricesell = p - 0.01
+					break
+				}
+			}
+
+			PostLimitOrder("ETH_USDT", "sell", "0.04", strconv.FormatFloat(pricesell, 'f', 2, 32))
+			id = LimitOrdId.Order_id
+			mx.Unlock()
+
+			sellorders = 1
+			time.Sleep(1000 * time.Millisecond)
+			BalanceRequest()
+
+		}
+		time.Sleep(1 * time.Minute)
+		if sellorders == 1 {
+			time.Sleep(5 * time.Millisecond)
+
+			pricecansel, _ = strconv.ParseFloat(binbid, 64)
+
+			pricecansel *= 1.003
+			mx.Lock()
+			for _, Bids := range ords.Pairs[pairr].Bids {
+
+				p, err := strconv.ParseFloat(Bids.Price, 64)
+				if err != nil {
+					fmt.Println("p error -> ", err)
+				}
+				if p >= pricecansel {
+					pricecansel = p - 0.01
+					break
+				}
+			}
+			mx.Unlock()
+
+			if pricecansel != pricesell {
+				CancelLimitOrder(id)
+			}
+			time.Sleep(250 * time.Millisecond)
+			sellorders = 0
 		}
 	}
 }
