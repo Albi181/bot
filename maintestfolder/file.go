@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
@@ -148,21 +147,23 @@ var sellorders int64
 func main() {
 	InfoRequest()
 
-	var buy, sell bool
+	// var buy, sell bool
 	var mx sync.Mutex
 
 	const binpair binance.Symbol = "ETHUSDT"
 	pair := "ETH_USDT"
 	const pairr pairs = "ETH_USDT"
 	const base currency = "ETH"
-	const nonbase currency = "USDT"
-	buy = true
-	sell = true
+	// const nonbase currency = "USDT"
+	// buy = true
+	// sell = true
 
-	//	var percentOfBalance decimal.Decimal = decimal.NewFromFloat(0.15) // процент от баланса идущий на лимит ордер
-	//	var evToLimitBuy decimal.Decimal = decimal.NewFromFloat(0.99)     // процент дельты от цены бинанса для лимит покупки
-	var evToMarketBuy decimal.Decimal = decimal.NewFromFloat(0.98)  // процент дельты от цены бинанса для маркет покупки
-	var evToMarketSell decimal.Decimal = decimal.NewFromFloat(1.02) // процент дельты от цены бинанса для маркет продажи
+	var percentOfBalance decimal.Decimal = decimal.NewFromFloat(0.05) // процент от баланса идущий на лимит ордер
+	//	var evToLimitBuy decimal.Decimal = decimal.NewFromFloat(0.99)    	 // процент дельты от цены бинанса для лимит покупки
+	var evToLimitSell decimal.Decimal = decimal.NewFromFloat(1.05) // процент дельты от цены бинанса для лимит продажи
+
+	// var evToMarketBuy decimal.Decimal = decimal.NewFromFloat(0.98)  // процент дельты от цены бинанса для маркет покупки
+	// var evToMarketSell decimal.Decimal = decimal.NewFromFloat(1.02) // процент дельты от цены бинанса для маркет продажи
 
 	BalanceRequest()
 
@@ -171,11 +172,11 @@ func main() {
 
 	time.Sleep(10 * time.Second)
 
-	//go LimitSell(pairr, &mx)
+	go LimitSell(pairr, pair, &mx, percentOfBalance, base, evToLimitSell)
 	// go LimitBuy(pairr, pair, &mx, percentOfBalance, nonbase, evToLimitBuy)
 
-	go MarketBuy(pairr, &mx, pair, buy, nonbase, evToMarketBuy)
-	go MarketSell(pairr, &mx, pair, sell, base, evToMarketSell)
+	// go MarketBuy(pairr, &mx, pair, buy, nonbase, evToMarketBuy)
+	// go MarketSell(pairr, &mx, pair, sell, base, evToMarketSell)
 
 	select {}
 
@@ -571,66 +572,79 @@ func LimitBuy(pairr pairs, pair string, mx *sync.Mutex, percentOfBalance decimal
 	}
 }
 
-func LimitSell(pairr pairs, mx *sync.Mutex) {
+func LimitSell(pairr pairs, pair string, mx *sync.Mutex, percentOfBalance decimal.Decimal, base currency, evToLimitSell decimal.Decimal) {
 	sellorders = 0
-	var pricesell float64
-	var pricecansel float64
-	var id int // 																						нахрена оно?
+	var pricesell decimal.Decimal
+	var pricecansel decimal.Decimal
+	var id int
 	for {
 		if sellorders == 0 {
 			time.Sleep(5 * time.Millisecond)
 
-			pricesell, _ = strconv.ParseFloat(binbid, 64)
+			pricesell, _ = decimal.NewFromString(binask)
 
-			pricesell *= 1.002 // 												% для лимитки
+			pricesell = pricesell.Mul(evToLimitSell) // 												% для лимитки
 			mx.Lock()
-			for _, Bids := range ords.Pairs[pairr].Bids {
+			for _, Asks := range ords.Pairs[pairr].Asks {
 
-				p, err := strconv.ParseFloat(Bids.Price, 64)
+				p, err := decimal.NewFromString(Asks.Price)
 				if err != nil {
 					fmt.Println("p error -> ", err)
 				}
-				if p >= pricesell {
-					pricesell = p - 0.01
+				if p.GreaterThanOrEqual(pricesell) {
+					pricesell = p.Sub(decimal.NewFromFloat(0.01))
 					break
 				}
 			}
-
-			PostOrder("ETH_USDT", "limit", "sell", "0.01435187", "", strconv.FormatFloat(pricesell, 'f', 2, 32)) // пост ордер в лимитке
-			id = LimitOrdId.Order_id
 			mx.Unlock()
+
+			a := percentOfBalance.Mul(decimal.NewFromFloat(Balas.Balance[base].Total))
+
+			if a.GreaterThanOrEqual(decimal.NewFromFloat(InfoForPairs.Pairs[pairr].MinAmount)) { // 		больше минималки
+				PostOrder(pair, "limit", "buy", a.String(), "", pricesell.String()) // пост ордер в лимитке
+				id = LimitOrdId.Order_id                                            // int
+			} else {
+				continue
+			}
 
 			sellorders = 1
 			time.Sleep(1000 * time.Millisecond)
 			BalanceRequest()
-
+			time.Sleep(1 * time.Minute)
 		}
-		time.Sleep(1 * time.Minute)
+
 		if sellorders == 1 {
 			time.Sleep(5 * time.Millisecond)
 
-			pricecansel, _ = strconv.ParseFloat(binbid, 64)
+			pricecansel, _ = decimal.NewFromString(binask)
 
-			pricecansel *= 1.002 // 												% для лимитки
+			pricecansel = pricecansel.Mul(evToLimitSell)
 			mx.Lock()
-			for _, Bids := range ords.Pairs[pairr].Bids {
+			for _, Asks := range ords.Pairs[pairr].Asks {
 
-				p, err := strconv.ParseFloat(Bids.Price, 64)
+				p, err := decimal.NewFromString(Asks.Price)
 				if err != nil {
 					fmt.Println("p error -> ", err)
 				}
-				if p >= pricecansel {
-					pricecansel = p - 0.01
+				if p.GreaterThanOrEqual(pricecansel) {
+					pricecansel = p
 					break
 				}
 			}
 			mx.Unlock()
 
-			if pricecansel != pricesell {
-				CancelLimitOrder(id)
+			if !pricecansel.Equal(pricesell) {
+				for {
+					CancelLimitOrder(id)
+					if CancelOrd.Errror.ErrrorCode == ACCESS_DENIED || CancelOrd.Success {
+						break
+					}
+					time.Sleep(500 * time.Millisecond)
+				}
+
+				time.Sleep(250 * time.Millisecond)
+				sellorders = 0
 			}
-			time.Sleep(250 * time.Millisecond)
-			sellorders = 0
 		}
 	}
 }
