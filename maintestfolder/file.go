@@ -141,49 +141,65 @@ var binask string // цена бинанс аск (стримится функц
 var binbid string
 var ords OrdersResponce
 
-var buyorders int64
-var sellorders int64
 var mx sync.Mutex
 
 func main() {
-	InfoRequest()
 
-	var buy, sell bool
-
+	var mut sync.RWMutex
 	const binpair binance.Symbol = "ETHUSDT"
 	pair := "ETH_USDT"
 	const pairr pairs = "ETH_USDT"
 	const base currency = "ETH"
 	const nonbase currency = "USDT"
-	buy = true
-	sell = true
 
-	var percentOfBalance decimal.Decimal = decimal.NewFromFloat(0.15) // процент от баланса идущий на лимит ордер
-	var evToLimitBuy decimal.Decimal = decimal.NewFromFloat(0.99)     // процент дельты от цены бинанса для лимит покупки
-	var evToLimitSell decimal.Decimal = decimal.NewFromFloat(1.005)   // процент дельты от цены бинанса для лимит продажи
+	var basePart decimal.Decimal    // asset  для Sell - соответствует base активу ETH (в USDT)
+	var nonbasePart decimal.Decimal // asset  для Buy - соответствует nonbase активу USDT
 
-	var evToMarketBuy decimal.Decimal = decimal.NewFromFloat(0.99)  // процент дельты от цены бинанса для маркет покупки
-	var evToMarketSell decimal.Decimal = decimal.NewFromFloat(1.05) // процент дельты от цены бинанса для маркет продажи
+	var percentOfBalance decimal.Decimal = decimal.NewFromFloat(0.25) // процент от баланса идущий на лимит ордер
 
+	var evToMarketSell_MIN decimal.Decimal = decimal.NewFromFloat(1.002) // процент дельты от цены бинанса для маркет продажи (MIN)  1.002
+	var evToMarketSell_MAX decimal.Decimal = decimal.NewFromFloat(1.002) // процент дельты от цены бинанса для маркет продажи (MAX)  1.003
+	var evToMarketSell decimal.Decimal                                   // процент дельты от цены бинанса для маркет продажи
+
+	var evToLimitSell_MIN decimal.Decimal = decimal.NewFromFloat(1.002) // процент дельты от цены бинанса для лимит продажи (MIN)  1.002
+	var evToLimitSell_MAX decimal.Decimal = decimal.NewFromFloat(1.002) // процент дельты от цены бинанса для лимит продажи (MAX)  1.003
+	var evToLimitSell decimal.Decimal                                   // процент дельты от цены бинанса для лимит продажи
+
+	var evToMarketBuy_MIN decimal.Decimal = decimal.NewFromFloat(0.995) // процент дельты от цены бинанса для маркет покупки (MIN)  0.995
+	var evToMarketBuy_MAX decimal.Decimal = decimal.NewFromFloat(0.995) // процент дельты от цены бинанса для маркет покупки (MAX)  0.991
+	var evToMarketBuy decimal.Decimal                                   // процент дельты от цены бинанса для маркет покупки
+
+	var evToLimitBuy_MIN decimal.Decimal = decimal.NewFromFloat(0.995) // процент дельты от цены бинанса для лимит покупки (MIN)  0.996
+	var evToLimitBuy_MAX decimal.Decimal = decimal.NewFromFloat(0.995) // процент дельты от цены бинанса для лимит покупки (MAX)  0.992
+	var evToLimitBuy decimal.Decimal                                   // процент дельты от цены бинанса для лимит покупки
+
+	InfoRequest()
 	BalanceRequest(&mx)
-
 	go Bintic2(binpair)
 	go OrdersRequest(pair, &mx)
+	time.Sleep(8 * time.Second)
 
-	time.Sleep(10 * time.Second)
+	go BalancePercent(&basePart, &nonbasePart, &mut, &mx, pairr, base, nonbase) // генерирует basePart и nonbasePart
+	time.Sleep(1 * time.Second)
 
-	go LimitSell(pairr, pair, &mx, percentOfBalance, base, evToLimitSell)
-	go LimitBuy(pairr, pair, &mx, percentOfBalance, nonbase, evToLimitBuy)
+	go ChooseEV(evToLimitSell_MIN, evToLimitSell_MAX, &basePart, &evToLimitSell, &mut)    // для лимит sell
+	go ChooseEV(evToLimitBuy_MIN, evToLimitBuy_MAX, &nonbasePart, &evToLimitBuy, &mut)    // для лимит buy
+	go ChooseEV(evToMarketSell_MIN, evToMarketSell_MAX, &basePart, &evToMarketSell, &mut) // для маркет sell
+	go ChooseEV(evToMarketBuy_MIN, evToMarketBuy_MAX, &nonbasePart, &evToMarketBuy, &mut) // для маркет buy
+	time.Sleep(1 * time.Second)
 
-	go MarketBuy(pairr, &mx, pair, buy, nonbase, evToMarketBuy)
-	go MarketSell(pairr, &mx, pair, sell, base, evToMarketSell)
+	go LimitSell(pairr, pair, &mx, percentOfBalance, base, &evToLimitSell)
+	go LimitBuy(pairr, pair, &mx, percentOfBalance, nonbase, &evToLimitBuy)
+
+	go MarketBuy(pairr, &mx, pair, nonbase, &evToMarketBuy)
+	go MarketSell(pairr, &mx, pair, base, &evToMarketSell)
 
 	select {}
 
 }
 
 func Bintic2(binpair binance.Symbol) {
-	Orders2 := binance.NewClient().SubscribeTicker(binpair, time.Millisecond*100)
+	Orders2 := binance.NewClient().SubscribeTicker(binpair, time.Millisecond*25)
 	for Order2 := range Orders2 {
 		binask = Order2.AskPrice
 		binbid = Order2.BidPrice
@@ -391,126 +407,120 @@ func CancelLimitOrder(order_id int) {
 
 }
 
-func MarketBuy(pairr pairs, mx *sync.Mutex, pair string, buy bool, nonbase currency, evToMarketBuy decimal.Decimal) {
+func MarketBuy(pairr pairs, mx *sync.Mutex, pair string, nonbase currency, evToMarketBuy *decimal.Decimal) {
+	for {
+		time.Sleep(5 * time.Millisecond)
 
-	if buy {
-		for {
-			time.Sleep(5 * time.Millisecond)
+		ss := decimal.NewFromFloat(0) // sum of Asks.Values  (велью ту бай)
+		dd := decimal.NewFromFloat(0) // dd sum of Asks.Amounts (эмаунт ту бай)
 
-			ss := decimal.NewFromFloat(0) // sum of Asks.Values  (велью ту бай)
-			dd := decimal.NewFromFloat(0) // dd sum of Asks.Amounts (эмаунт ту бай)
+		mx.Lock()
+		valueFUCK := decimal.NewFromFloat(Balas.Balance[nonbase].Available)
 
-			mx.Lock()
-			valueFUCK := decimal.NewFromFloat(Balas.Balance[nonbase].Available)
-
-			for _, Asks := range ords.Pairs[pairr].Asks {
-				p, err := decimal.NewFromString(Asks.Price)
-				if err != nil {
-					fmt.Println("p error -> ", err)
-				}
-				b, err := decimal.NewFromString(binbid)
-				if err != nil {
-					fmt.Println("b error -> ", err)
-				}
-				c, err := decimal.NewFromString(Asks.Value)
-				if err != nil {
-					fmt.Println("c error -> ", err)
-				}
-				d, err := decimal.NewFromString(Asks.Amount)
-				if err != nil {
-					fmt.Println("c error -> ", err)
-				}
-
-				if p.Div(b).LessThan(evToMarketBuy) { //		ев для маркет бая
-
-					if valueFUCK.LessThanOrEqual(c) {
-						ss = ss.Add(valueFUCK)
-						dd = dd.Add(valueFUCK.Div(p))
-						break
-					} else {
-						ss = ss.Add(c)
-						dd = dd.Add(d)
-						valueFUCK = valueFUCK.Sub(c)
-					}
-				}
+		for _, Asks := range ords.Pairs[pairr].Asks {
+			p, err := decimal.NewFromString(Asks.Price)
+			if err != nil {
+				fmt.Println("p error -> ", err)
+			}
+			b, err := decimal.NewFromString(binbid)
+			if err != nil {
+				fmt.Println("b error -> ", err)
+			}
+			c, err := decimal.NewFromString(Asks.Value)
+			if err != nil {
+				fmt.Println("c error -> ", err)
+			}
+			d, err := decimal.NewFromString(Asks.Amount)
+			if err != nil {
+				fmt.Println("c error -> ", err)
 			}
 
-			a := decimal.NewFromFloat(InfoForPairs.Pairs[pairr].MinValue)
-			b := decimal.NewFromFloat(InfoForPairs.Pairs[pairr].MinAmount)
+			if p.Div(b).LessThan(*evToMarketBuy) { //		ев для маркет бая
 
-			mx.Unlock()
-
-			if ss.GreaterThanOrEqual(a) && dd.GreaterThanOrEqual(b) {
-				PostOrder(pair, "market", "buy", "", ss.String(), "")
-				time.Sleep(500 * time.Millisecond)
-
-				BalanceRequest(mx)
-
+				if valueFUCK.LessThanOrEqual(c) {
+					ss = ss.Add(valueFUCK)
+					dd = dd.Add(valueFUCK.Div(p))
+					break
+				} else {
+					ss = ss.Add(c)
+					dd = dd.Add(d)
+					valueFUCK = valueFUCK.Sub(c)
+				}
 			}
+		}
+
+		a := decimal.NewFromFloat(InfoForPairs.Pairs[pairr].MinValue)
+		b := decimal.NewFromFloat(InfoForPairs.Pairs[pairr].MinAmount)
+
+		mx.Unlock()
+
+		if ss.GreaterThanOrEqual(a) && dd.GreaterThanOrEqual(b) {
+			PostOrder(pair, "market", "buy", "", ss.String(), "")
+			time.Sleep(500 * time.Millisecond)
+
+			BalanceRequest(mx)
+
 		}
 	}
 }
 
-func MarketSell(pairr pairs, mx *sync.Mutex, pair string, sell bool, base currency, evToMarketSell decimal.Decimal) {
+func MarketSell(pairr pairs, mx *sync.Mutex, pair string, base currency, evToMarketSell *decimal.Decimal) {
+	for {
+		time.Sleep(5 * time.Millisecond)
 
-	if sell {
-		for {
-			time.Sleep(5 * time.Millisecond)
+		ss := decimal.NewFromFloat(0) // sum of Bids.Values  (велью ту селл)
+		dd := decimal.NewFromFloat(0) // dd sum of Bids.Amounts (эмаунт ту селл)
 
-			ss := decimal.NewFromFloat(0) // sum of Bids.Values  (велью ту селл)
-			dd := decimal.NewFromFloat(0) // dd sum of Bids.Amounts (эмаунт ту селл)
+		mx.Lock()
+		amountFUCK := decimal.NewFromFloat(Balas.Balance[base].Available)
 
-			mx.Lock()
-			amountFUCK := decimal.NewFromFloat(Balas.Balance[base].Available)
+		for _, Bids := range ords.Pairs[pairr].Bids {
+			p, err := decimal.NewFromString(Bids.Price)
+			if err != nil {
+				fmt.Println("p error -> ", err)
+			}
+			b, err := decimal.NewFromString(binask)
+			if err != nil {
+				fmt.Println("b error -> ", err)
+			}
+			c, err := decimal.NewFromString(Bids.Value)
+			if err != nil {
+				fmt.Println("c error -> ", err)
+			}
+			d, err := decimal.NewFromString(Bids.Amount)
+			if err != nil {
+				fmt.Println("c error -> ", err)
+			}
 
-			for _, Bids := range ords.Pairs[pairr].Bids {
-				p, err := decimal.NewFromString(Bids.Price)
-				if err != nil {
-					fmt.Println("p error -> ", err)
-				}
-				b, err := decimal.NewFromString(binask)
-				if err != nil {
-					fmt.Println("b error -> ", err)
-				}
-				c, err := decimal.NewFromString(Bids.Value)
-				if err != nil {
-					fmt.Println("c error -> ", err)
-				}
-				d, err := decimal.NewFromString(Bids.Amount)
-				if err != nil {
-					fmt.Println("c error -> ", err)
-				}
+			if p.Div(b).GreaterThan(*evToMarketSell) {
 
-				if p.Div(b).GreaterThan(evToMarketSell) {
-
-					if amountFUCK.LessThanOrEqual(d) {
-						dd = dd.Add(amountFUCK)
-						ss = ss.Add(p.Mul(amountFUCK))
-						break
-					} else {
-						dd = dd.Add(d)
-						ss = ss.Add(c)
-						amountFUCK = amountFUCK.Sub(d)
-					}
+				if amountFUCK.LessThanOrEqual(d) {
+					dd = dd.Add(amountFUCK)
+					ss = ss.Add(p.Mul(amountFUCK))
+					break
+				} else {
+					dd = dd.Add(d)
+					ss = ss.Add(c)
+					amountFUCK = amountFUCK.Sub(d)
 				}
 			}
-			a := decimal.NewFromFloat(InfoForPairs.Pairs[pairr].MinValue)
-			b := decimal.NewFromFloat(InfoForPairs.Pairs[pairr].MinAmount)
-			mx.Unlock()
-			//	fmt.Println("sum of Bids.Values ->", ss, "sum of Bids.Amounts ->", dd)
-			if ss.GreaterThanOrEqual(a) && dd.GreaterThanOrEqual(b) {
-				PostOrder(pair, "market", "sell", dd.String(), "", "")
-				time.Sleep(500 * time.Millisecond)
+		}
+		a := decimal.NewFromFloat(InfoForPairs.Pairs[pairr].MinValue)
+		b := decimal.NewFromFloat(InfoForPairs.Pairs[pairr].MinAmount)
+		mx.Unlock()
+		//	fmt.Println("sum of Bids.Values ->", ss, "sum of Bids.Amounts ->", dd)
+		if ss.GreaterThanOrEqual(a) && dd.GreaterThanOrEqual(b) {
+			PostOrder(pair, "market", "sell", dd.String(), "", "")
+			time.Sleep(500 * time.Millisecond)
 
-				BalanceRequest(mx)
+			BalanceRequest(mx)
 
-			}
 		}
 	}
 }
 
-func LimitBuy(pairr pairs, pair string, mx *sync.Mutex, percentOfBalance decimal.Decimal, nonbase currency, evToLimitBuy decimal.Decimal) {
-	buyorders = 0
+func LimitBuy(pairr pairs, pair string, mx *sync.Mutex, percentOfBalance decimal.Decimal, nonbase currency, evToLimitBuy *decimal.Decimal) {
+	buyorders := 0
 	var pricebuy decimal.Decimal
 	var pricecansel decimal.Decimal
 	var id int
@@ -521,7 +531,7 @@ func LimitBuy(pairr pairs, pair string, mx *sync.Mutex, percentOfBalance decimal
 
 			pricebuy, _ = decimal.NewFromString(binbid)
 
-			pricebuy = pricebuy.Mul(evToLimitBuy)
+			pricebuy = pricebuy.Mul(*evToLimitBuy)
 			mx.Lock()
 			for _, Bids := range ords.Pairs[pairr].Bids {
 
@@ -558,7 +568,7 @@ func LimitBuy(pairr pairs, pair string, mx *sync.Mutex, percentOfBalance decimal
 
 			pricecansel, _ = decimal.NewFromString(binbid)
 
-			pricecansel = pricecansel.Mul(evToLimitBuy)
+			pricecansel = pricecansel.Mul(*evToLimitBuy)
 			mx.Lock()
 			for _, Bids := range ords.Pairs[pairr].Bids {
 
@@ -589,8 +599,8 @@ func LimitBuy(pairr pairs, pair string, mx *sync.Mutex, percentOfBalance decimal
 	}
 }
 
-func LimitSell(pairr pairs, pair string, mx *sync.Mutex, percentOfBalance decimal.Decimal, base currency, evToLimitSell decimal.Decimal) {
-	sellorders = 0
+func LimitSell(pairr pairs, pair string, mx *sync.Mutex, percentOfBalance decimal.Decimal, base currency, evToLimitSell *decimal.Decimal) {
+	sellorders := 0
 	var pricesell decimal.Decimal
 	var pricecansel decimal.Decimal
 	var id int
@@ -600,7 +610,7 @@ func LimitSell(pairr pairs, pair string, mx *sync.Mutex, percentOfBalance decima
 
 			pricesell, _ = decimal.NewFromString(binask)
 
-			pricesell = pricesell.Mul(evToLimitSell) // 												% для лимитки
+			pricesell = pricesell.Mul(*evToLimitSell) // 												% для лимитки
 			mx.Lock()
 			for _, Asks := range ords.Pairs[pairr].Asks {
 
@@ -636,7 +646,7 @@ func LimitSell(pairr pairs, pair string, mx *sync.Mutex, percentOfBalance decima
 
 			pricecansel, _ = decimal.NewFromString(binask)
 
-			pricecansel = pricecansel.Mul(evToLimitSell)
+			pricecansel = pricecansel.Mul(*evToLimitSell)
 			mx.Lock()
 			for _, Asks := range ords.Pairs[pairr].Asks {
 
@@ -690,4 +700,31 @@ func InfoRequest() {
 	json.Unmarshal(bodyBytes, &InfoForPairs)
 
 	//	fmt.Println(InfoForPairs)
+}
+
+func BalancePercent(basePart *decimal.Decimal, nonbasePart *decimal.Decimal, mut *sync.RWMutex, mx *sync.Mutex, pairr pairs, base currency, nonbase currency) {
+
+	mx.Lock()
+
+	ask, _ := decimal.NewFromString(ords.Pairs[pairr].Ask)
+	bid, _ := decimal.NewFromString(ords.Pairs[pairr].Bid)
+	bal := decimal.NewFromFloat(Balas.Balance[base].Total) // for base
+
+	totalBase := ((ask.Add(bid)).Div(decimal.NewFromFloat(2))).Mul(bal) // totalBase := (ask + bid) / 2 * Balas.Balance[base].Total // (in USDT)
+	totalNonbase := decimal.NewFromFloat(Balas.Balance[nonbase].Total)  // (USDT)
+	mx.Unlock()
+
+	mut.Lock()
+	*basePart = totalBase.Div((totalBase.Add(totalNonbase)))       // totalBase / (totalBase + totalNonbase)
+	*nonbasePart = totalNonbase.Div((totalBase.Add(totalNonbase))) // totalNonbase / (totalBase + totalNonbase)
+	mut.Unlock()
+
+}
+
+func ChooseEV(ev_MIN decimal.Decimal, ev_MAX decimal.Decimal, asset *decimal.Decimal, evTo *decimal.Decimal, mut *sync.RWMutex) {
+	for {
+		mut.RLock()
+		*evTo = ev_MAX.Sub(((ev_MAX.Sub(ev_MIN)).Mul(*asset))) // max - (max - min)*asset
+		mut.RUnlock()
+	}
 }
